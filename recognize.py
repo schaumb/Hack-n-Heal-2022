@@ -1,3 +1,4 @@
+from PIL import Image
 import datetime
 import functools
 import json
@@ -10,17 +11,18 @@ import streamlit as st
 from st_aggrid import AgGrid
 import requests
 
-st.title("RePharma admission form")
 
+im = Image.open("RePharma-transparent.png")
+st.set_page_config(page_title="RePharma", page_icon=im)
 
-@st.experimental_singleton
-def get_pharma_list():
-    return pd.read_csv("data/tk_lista.csv")
+img, _, title = st.columns([0.1, 0.1, 0.9])
+img.image(im, width=100)
+title.title("RePharma admission form")
 
 
 @st.experimental_singleton
 def get_registered_pharma_list():
-    return pd.read_csv("data/registered_pharma_list.csv")
+    return pd.DataFrame(columns=['Barcode', 'Name', 'Quantity', 'Left quantity', 'Expiry date'])
 
 
 @st.experimental_memo(show_spinner=False)
@@ -61,7 +63,7 @@ restart = st.empty()
 if restart.button("New product"):
     st.session_state.ean = ""
 
-line = line_wr.text_input("EAN number", key="ean").strip().replace('ö', '0')
+line = line_wr.text_input("EAN number or free word search", key="ean").strip().replace('ö', '0')
 
 with content:
     if line:
@@ -87,7 +89,6 @@ with content:
 
                 if st.form_submit_button("Submit"):
                     df.loc[len(df.index)] = [line, name, quantity, left_quantity, expiry_date.strftime("%m-%Y")]
-                    df.to_csv("data/registered_pharma_list.csv", index=False)
                     st.success("Product has been added to the list!")
 
         else:
