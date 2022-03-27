@@ -6,20 +6,20 @@ import streamlit as st
 import requests
 
 from PIL import Image
-from st_aggrid import AgGrid
-
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 im = Image.open("RePharma-transparent.png")
 st.set_page_config(page_title="RePharma", page_icon=im)
 
 img, _, title = st.columns([0.1, 0.1, 0.9])
 img.image(im, width=100)
-title.title("RePharma admission form")
 
 
 @st.experimental_singleton(show_spinner=False)
 def current_enabled_pharma_list():
-    return pd.read_csv('https://ogyei.gov.hu/generalt_listak/tk_lista.csv', sep=';', encoding='ISO-8859-2').filter(regex='Név|Kiszerelés')
+    return pd.read_csv('https://ogyei.gov.hu/generalt_listak/tk_lista.csv', sep=';', encoding='ISO-8859-2').filter(
+        regex='Név|Kiszerelés')
+
 
 @st.experimental_singleton
 def get_registered_pharma_list():
@@ -42,7 +42,8 @@ def get_pharma_information(barcode):
 
         if response:
             return response[0]['title'].split(' - ')[0].strip(), \
-                   requests.request("GET", response[0]['link']).text.split('Kiszerelés:')[1].split('</div>')[0].split('>')[-1]
+                   requests.request("GET", response[0]['link']).text.split('Kiszerelés:')[1].split('</div>')[0].split(
+                       '>')[-1]
 
         else:
             url = "https://google-search3.p.rapidapi.com/api/v1/search/q=site:https://egeszsegpalace.hu%20" + barcode
@@ -56,61 +57,103 @@ def get_pharma_information(barcode):
                 return None, None
 
 
-df = get_registered_pharma_list()
 
 with st.spinner("Downloading marketed medicine list (in Hungary)..."):
     all_list = current_enabled_pharma_list()
-line_wr = st.empty()
-content = st.container()
-restart = st.empty()
+df = get_registered_pharma_list()
 
-if restart.button("New product"):
-    st.session_state.ean = ""
-    st.session_state.name_from_list = ""
+additional_page = not st.experimental_get_query_params().get("p", "")
 
-line_ctn = line_wr.container()
-name_from_list = line_ctn.selectbox("Pharma name from list", ["", *all_list[all_list.columns].agg(' - '.join, axis=1)], key="name_from_list")
+if additional_page:
+    title.title("RePharma admission form")
 
-line = line_ctn.text_input("EAN number", key="ean").strip().replace('ö', '0')
 
-with content:
-    if name_from_list or line:
-        if name_from_list:
-            name, quantity = name_from_list.split(' - ', 1)
-        elif line:
-            name, quantity = get_pharma_information(line)
+    line_wr = st.empty()
+    content = st.container()
+    restart = st.empty()
+
+    if restart.button("New product"):
+        st.session_state.ean = ""
+        st.session_state.name_from_list = ""
+
+    line_ctn = line_wr.container()
+    name_from_list = line_ctn.selectbox("Pharma name from list", ["", *all_list[all_list.columns].agg(' - '.join, axis=1)], key="name_from_list")
+
+    line = line_ctn.text_input("EAN number", key="ean").strip().replace('ö', '0')
+
+    with content:
+        if name_from_list or line:
+            if name_from_list:
+                name, quantity = name_from_list.split(' - ', 1)
+            elif line:
+                name, quantity = get_pharma_information(line)
+            else:
+                name = None
+
+            if name:
+                line_wr.empty()
+                name_c, quantity_c = st.columns([0.8, 0.2])
+                name_c.subheader("Name")
+                name_c.write(name)
+                quantity_c.subheader("Quantity")
+                quantity_c.write(quantity)
+
+                max_quantity = int(functools.reduce(lambda i, j: float(i) * float(j), re.findall(r'[\d.]+', quantity)))
+
+                today = datetime.date.today()
+
+                with st.form(key="form"):
+                    expiry_date = st.date_input("Expiry date", min_value=today)
+
+                    quantity_c, unit_of_measurement_c = st.columns([0.75, 0.25])
+                    left_quantity = quantity_c.selectbox("Quantity left in product", reversed(range(1, max_quantity+1)), key='quantity')
+                    default_unit = 1 if 'ml' in quantity else 2 if 'g' in quantity else 0
+                    unit_of_measurement = unit_of_measurement_c.selectbox("Unit of measurement", ['piece(s)', 'ml', 'gram(s)'], index=default_unit,
+                                                                          key='mertekegyseg', disabled=bool(default_unit))
+
+                    if st.form_submit_button("Submit"):
+                        df.loc[len(df.index)] = [line, name, quantity, left_quantity, unit_of_measurement, expiry_date.strftime("%m-%Y")]
+                        st.success("Product has been added to the list!")
+
+            else:
+                st.warning("No information found")
         else:
-            name = None
+            restart.empty()
 
-        if name:
-            line_wr.empty()
-            name_c, quantity_c = st.columns([0.8, 0.2])
-            name_c.subheader("Name")
-            name_c.write(name)
-            quantity_c.subheader("Quantity")
-            quantity_c.write(quantity)
+    df_tr = df.filter(['Name', 'Quantity', 'Left quantity', 'Unit', 'Expiry date']).sort_values('Expiry date')
+    gridOptions = None
+    update = GridUpdateMode.NO_UPDATE
+else:
+    title.title("RePharma GP selector form")
 
-            max_quantity = int(functools.reduce(lambda i, j: float(i) * float(j), re.findall(r'[\d.]+', quantity)))
+    st.button("GET")
 
-            today = datetime.date.today()
+    df_tr = df.filter(['Name', 'Quantity', 'Left quantity', 'Unit', 'Expiry date']).sort_values('Expiry date')
 
-            with st.form(key="form"):
-                expiry_date = st.date_input("Expiry date", min_value=today)
+    @st.experimental_memo
+    def get_grid_options():
+        gb = GridOptionsBuilder.from_dataframe(df_tr)
+        gb.configure_selection(selection_mode='multiple', use_checkbox=True)
+        return gb.build()
 
-                quantity_c, unit_of_measurement_c = st.columns([0.75, 0.25])
-                left_quantity = quantity_c.selectbox("Quantity left in product", reversed(range(1, max_quantity+1)), key='quantity')
-                default_unit = 1 if 'ml' in quantity else 2 if 'g' in quantity else 0
-                unit_of_measurement = unit_of_measurement_c.selectbox("Unit of measurement", ['piece(s)', 'ml', 'gram(s)'], index=default_unit,
-                                                                      key='mertekegyseg', disabled=bool(default_unit))
 
-                if st.form_submit_button("Submit"):
-                    df.loc[len(df.index)] = [line, name, quantity, left_quantity, unit_of_measurement, expiry_date.strftime("%m-%Y")]
-                    st.success("Product has been added to the list!")
+    gridOptions = get_grid_options()
+    update = GridUpdateMode.SELECTION_CHANGED
 
-        else:
-            st.warning("No information found")
-    else:
-        restart.empty()
+g = AgGrid(df_tr,
+       gridOptions=gridOptions,
+       reload_data=True,
+       update_mode=update,
+       fit_columns_on_grid_load=True,
+       key='aggrid')
 
-AgGrid(df.filter(['Name', 'Left quantity', 'Unit', 'Expiry date']).sort_values('Expiry date'), reload_data=True,
-           fit_columns_on_grid_load=True, key='aggrid')
+if not additional_page:
+    was = False
+    for selected in g["selected_rows"]:
+        for ith in df[(df['Name'] == selected['Name']) & (df['Quantity'] == selected['Quantity']) &
+               (df['Left quantity'] == selected['Left quantity']) & (
+                       df['Expiry date'] == selected['Expiry date'])].iterrows():
+            df.drop(ith[0], inplace=True)
+            was = True
+    if was:
+        st.experimental_rerun()
